@@ -1,0 +1,81 @@
+#!/bin/bash
+
+# Define log file
+LOG_FILE="migration_$(date +"%Y%m%d_%H%M%S").log"
+
+# Redirect stdout and stderr to the log file
+exec > >(tee -a "$LOG_FILE") 2>&1
+
+# Load environment variables from .env.migrate_database
+if [ ! -f ".env.migrate_database" ]; then
+  echo ".env.migrate_database file not found!"
+  exit 1
+fi
+
+# Export variables from the .env.migrate_full_database file
+export $(grep -v '^#' .env.migrate_database | xargs)
+
+# Ensure all necessary environment variables are set
+if [ -z "$SOURCE_HOST" ] || [ -z "$SOURCE_DB" ] || [ -z "$SOURCE_USER" ] || [ -z "$SOURCE_PASSWORD" ] ||
+   [ -z "$TARGET_HOST" ] || [ -z "$TARGET_DB" ] || [ -z "$TARGET_USER" ] || [ -z "$TARGET_PASSWORD" ] ||
+   [ -z "$SOURCE_PORT" ] || [ -z "$TARGET_PORT" ]; then
+  echo "Some required environment variables are missing in .env.migrate_database!"
+  exit 1
+fi
+
+# Step 1: Dump each schema separately to avoid locks
+echo "Dumping schemas from the source database '$SOURCE_DB' on $SOURCE_HOST:$SOURCE_PORT..."
+
+export PGPASSWORD=$SOURCE_PASSWORD
+
+# Get the list of schemas, excluding 'information_schema' and 'pg_catalog'
+SCHEMAS=$(psql -h $SOURCE_HOST -p $SOURCE_PORT -U $SOURCE_USER -d $SOURCE_DB -t -c \
+  "SELECT nspname FROM pg_catalog.pg_namespace WHERE nspname NOT IN ('information_schema', 'pg_catalog', 'pg_toast');")
+
+if [ -z "$SCHEMAS" ]; then
+  echo "No schemas found in the source database '$SOURCE_DB'."
+  exit 1
+fi
+echo $SCHEMAS
+# Step 2: Drop and recreate the target database (using an existing database like 'postgres')
+echo "Dropping and recreating the target database '$TARGET_DB' on $TARGET_HOST:$TARGET_PORT..."
+
+
+# Step 3: Dump and restore each schema
+for SCHEMA in $SCHEMAS; do
+  DUMP_FILE="${SCHEMA}_dump.sql"
+  export PGPASSWORD=$SOURCE_PASSWORD
+  echo "Dumping schema '$SCHEMA' from the source database..."
+  pg_dump -h $SOURCE_HOST -p $SOURCE_PORT -U $SOURCE_USER -d $SOURCE_DB -n "$SCHEMA" -Fc -f "$DUMP_FILE"
+
+  if [ $? -ne 0 ]; then
+    echo "Error dumping schema '$SCHEMA' from $SOURCE_DB on $SOURCE_HOST."
+    exit 1
+  fi
+
+  echo "Schema '$SCHEMA' dumped successfully."
+
+  export PGPASSWORD=$TARGET_PASSWORD
+  echo "Restoring schema '$SCHEMA' to the target database '$TARGET_DB' on $TARGET_HOST..."
+  pg_restore -h $TARGET_HOST -p $TARGET_PORT -U $TARGET_USER -d $TARGET_DB --clean --if-exists --no-owner --no-privileges -Fc "$DUMP_FILE"
+
+  if [ $? -ne 0 ]; then
+    echo "Error restoring schema '$SCHEMA' to $TARGET_DB on $TARGET_HOST."
+    exit 1
+  fi
+
+  echo "Schema '$SCHEMA' restored successfully."
+
+  # Clean up the dump file for this schema
+  rm -f "$DUMP_FILE"
+  echo "Temporary dump file for schema '$SCHEMA' removed."
+done
+
+# Final cleanup or notification
+echo "All schemas have been successfully migrated."
+
+# Optionally, send a completion notification (if configured, uncomment this line)
+# mail -s "Database migration complete" user@example.com < /dev/null
+
+# Exit the script successfully
+exit 0
