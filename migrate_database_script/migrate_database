@@ -12,7 +12,7 @@ if [ ! -f ".env.migrate_database" ]; then
   exit 1
 fi
 
-# Export variables from the .env.migrate_full_database file
+# Export variables from the .env.migrate_database file
 export $(grep -v '^#' .env.migrate_database | xargs)
 
 # Ensure all necessary environment variables are set
@@ -23,23 +23,27 @@ if [ -z "$SOURCE_HOST" ] || [ -z "$SOURCE_DB" ] || [ -z "$SOURCE_USER" ] || [ -z
   exit 1
 fi
 
-# Step 1: Dump each schema separately to avoid locks
-echo "Dumping schemas from the source database '$SOURCE_DB' on $SOURCE_HOST:$SOURCE_PORT..."
+# Check if specific schemas are passed as arguments
+if [ $# -gt 0 ]; then
+  SCHEMAS="$@"
+  echo "Migrating specified schemas: $SCHEMAS"
+else
 
-export PGPASSWORD=$SOURCE_PASSWORD
+  export PGPASSWORD=$SOURCE_PASSWORD
+  # Get the list of schemas, excluding 'information_schema' and 'pg_catalog'
+  echo "Dumping all schemas from the source database '$SOURCE_DB' on $SOURCE_HOST:$SOURCE_PORT..."
+  SCHEMAS=$(psql -h $SOURCE_HOST -p $SOURCE_PORT -U $SOURCE_USER -d $SOURCE_DB -t -c \
+    "SELECT nspname FROM pg_catalog.pg_namespace WHERE nspname NOT IN ('information_schema', 'pg_catalog', 'pg_toast');")
 
-# Get the list of schemas, excluding 'information_schema' and 'pg_catalog'
-SCHEMAS=$(psql -h $SOURCE_HOST -p $SOURCE_PORT -U $SOURCE_USER -d $SOURCE_DB -t -c \
-  "SELECT nspname FROM pg_catalog.pg_namespace WHERE nspname NOT IN ('information_schema', 'pg_catalog', 'pg_toast');")
-
-if [ -z "$SCHEMAS" ]; then
-  echo "No schemas found in the source database '$SOURCE_DB'."
-  exit 1
+  if [ -z "$SCHEMAS" ]; then
+    echo "No schemas found in the source database '$SOURCE_DB'."
+    exit 1
+  fi
+  echo "Migrating all schemas: $SCHEMAS"
 fi
-echo $SCHEMAS
+
 # Step 2: Drop and recreate the target database (using an existing database like 'postgres')
 echo "Dropping and recreating the target database '$TARGET_DB' on $TARGET_HOST:$TARGET_PORT..."
-
 
 # Step 3: Dump and restore each schema
 for SCHEMA in $SCHEMAS; do
@@ -72,7 +76,7 @@ for SCHEMA in $SCHEMAS; do
 done
 
 # Final cleanup or notification
-echo "All schemas have been successfully migrated."
+echo "All specified schemas have been successfully migrated."
 
 # Optionally, send a completion notification (if configured, uncomment this line)
 # mail -s "Database migration complete" user@example.com < /dev/null

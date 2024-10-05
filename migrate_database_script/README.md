@@ -49,7 +49,13 @@ To migrate all schemas from the source database, run:
 To migrate a specific schema, provide the schema name as an argument:
 
 ```
-./migrate_database.sh
+./migrate_database.sh schema1
+```
+
+To migrate multiple schemas, provide the schema names separated by spaces::
+
+```
+./migrate_database.sh schema1 schema2 schema3
 ```
 
 ## Logging

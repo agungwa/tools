@@ -1,2 +1,4 @@
 nohup*
 .env*
+migration_*
+*_dump.sql
